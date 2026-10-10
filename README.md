@@ -1,4 +1,4 @@
-```markdown
+
 # hider
 
 Çok platformlu otomatik IP değiştirici. İşletim sistemini otomatik algılar, uygun
@@ -9,7 +9,6 @@ proxy listenden birini kullanır.
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
----
 
 ## ✨ Özellikler
 
@@ -30,7 +29,6 @@ proxy listenden birini kullanır.
 - 🧹 **Temiz çıkış** — `Ctrl+C`'de Tor servisini kapatır, sistemde sızıntı bırakmaz
 - 🔐 **Root otomatik** — `sudo` olmadan çalıştırırsan kendini `sudo` ile yeniden başlatır
 
----
 
 ## 📦 Kurulum
 
