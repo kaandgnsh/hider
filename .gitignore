@@ -1,0 +1,14 @@
+*.log
+hider.log
+__pycache__/
+*.py[cod]
+venv/
+env/
+.venv/
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+proxies.txt
+.zed/

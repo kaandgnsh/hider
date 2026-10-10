@@ -1,0 +1,21 @@
+[Unit]
+Description=hider — Otomatik IP Değiştirici
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/hider
+ExecStart=/usr/bin/python3 /opt/hider/hider.py -t 30
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
