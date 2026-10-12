@@ -41,7 +41,7 @@ if ! python3 -c "import requests" 2>/dev/null; then
   log "python3-requests kuruluyor..."
   case "$OS_FAMILY" in
     debian)        apt-get update -qq && apt-get install -y python3-requests ;;
-    arch)          pacman -Sy --noconfirm python-requests ;;
+    arch)          pacman -S --noconfirm --needed python-requests ;;
     fedora)        dnf install -y python3-requests ;;
     macos)         python3 -m pip install --user requests ;;
     *)             python3 -m pip install --user requests ;;
@@ -85,7 +85,7 @@ if [[ "$OS_FAMILY" == debian || "$OS_FAMILY" == arch || \
     log "tor kuruluyor..."
     case "$OS_FAMILY" in
       debian)        apt-get install -y tor ;;
-      arch)          pacman -Sy --noconfirm tor ;;
+      arch)          pacman -S --noconfirm --needed tor ;;
       fedora)        dnf install -y tor ;;
       linux-other)   warn "Bilinmeyen dağıtım, tor'u manuel kurun." ;;
     esac

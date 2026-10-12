@@ -1,0 +1,36 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Python requirements
+        run: python -m pip install -r requirements.txt
+
+      - name: Compile source
+        run: python -m compileall -q hider.py
+
+      - name: Run unit tests
+        run: python -m unittest -v test_hider
+
+      - name: Check installer syntax
+        run: bash -n installer.sh
