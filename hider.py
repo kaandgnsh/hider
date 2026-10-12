@@ -758,16 +758,19 @@ def _wait_for_tor_ports(backend, max_seconds=40):
     return False
 
 
-def ensure_tor_ready(osinfo):
+def ensure_tor_ready(osinfo, allow_system_changes=False):
     backend = TorBackend()
 
     if not _HAS_SOCKS:
-        _install_pysocks(osinfo)
+        if not allow_system_changes or not _install_pysocks(osinfo):
+            return False
 
     if backend.available():
         return backend.wait_bootstrap(max_seconds=20)
 
     if not have('tor'):
+        if not allow_system_changes:
+            return False
         if not _install_tor_pkg(osinfo):
             print(C_KIRMIZI + "[!] Tor kurulamadi." + C_BITIR)
             return False
@@ -878,6 +881,15 @@ def _print_manual_hint(osinfo):
     print("    Veya proxy listesi ver: python3 hider.py -p /yol/lista.txt")
 
 
+def _confirm_system_changes(reason):
+    print(C_SARI + "[!] System-level changes requested: " + reason + C_BITIR)
+    try:
+        answer = input("Proceed with these changes? [y/N] ")
+    except EOFError:
+        return False
+    return answer.strip().lower() in {"y", "yes"}
+
+
 def pick_backend(args, osinfo):
     if args.backend == 'proxy' or args.proxy_file:
         if not args.proxy_file:
@@ -894,10 +906,17 @@ def pick_backend(args, osinfo):
         return b
 
     if args.backend == 'tor':
-        if not args.no_install:
-            if not ensure_tor_ready(osinfo):
-                _print_manual_hint(osinfo)
-                sys.exit(1)
+        b = TorBackend(password=args.tor_password)
+        if b.available() and _HAS_SOCKS and b.wait_bootstrap(max_seconds=20):
+            return b
+        if args.no_install or not _confirm_system_changes(
+            "Tor/PySocks may be installed, local torrc settings may be appended, and the Tor service may be restarted."
+        ):
+            _print_manual_hint(osinfo)
+            sys.exit(1)
+        if not ensure_tor_ready(osinfo, allow_system_changes=True):
+            _print_manual_hint(osinfo)
+            sys.exit(1)
         b = TorBackend(password=args.tor_password)
         if not b.available():
             print(C_KIRMIZI + "[!] Tor portlari hala kapali." + C_BITIR)
@@ -912,14 +931,14 @@ def pick_backend(args, osinfo):
             return b
 
     b = TorBackend(password=args.tor_password)
-    if b.available():
-        if _HAS_SOCKS and b.wait_bootstrap(max_seconds=20):
-            log.info("Tor hazir, onunla devam ediliyor.")
-            return b
+    if b.available() and _HAS_SOCKS and b.wait_bootstrap(max_seconds=20):
+        log.info("Tor hazir, onunla devam ediliyor.")
+        return b
 
-    if not args.no_install:
-        print(C_SARI + "[*] Aktif backend bulunamadi. Tor otomatik kurulacak." + C_BITIR)
-        if ensure_tor_ready(osinfo):
+    if not args.no_install and _confirm_system_changes(
+        "No ready backend was detected. Tor/PySocks may be installed, torrc may be changed, and Tor may be restarted."
+    ):
+        if ensure_tor_ready(osinfo, allow_system_changes=True):
             b = TorBackend(password=args.tor_password)
             if b.available():
                 return b
