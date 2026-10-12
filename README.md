@@ -5,6 +5,9 @@
 backend'i seçer, belirlediğin aralıkta IP'ni değiştirir. Tor, anonsurf veya kendi
 proxy listenden birini kullanır.
 
+> [!WARNING]
+> **Eğitim ve gizlilik koruma amaçlıdır.** Hider, ağ gizliliği ve proxy/Tor davranışlarını kontrollü ortamda öğrenmek için hazırlanmış bir projedir. Yalnızca kendi cihazlarında ve kullanımına izin verilen ağlarda kullan. IP değiştirmek anonimlik veya tam koruma garantisi vermez; erişim kontrollerini aşmak ya da yasa dışı faaliyeti gizlemek için kullanma. Bu açıklama tek başına hukuki sorumluluktan muafiyet sağlamaz.
+
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue)
 ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -258,9 +261,10 @@ proxy yoksa tool net hata verir.
  | | | | | (_| |  __/ |
  |_| |_|_|\__,_|\___|_|
 
-Author:    kaandgnsh
+Author:    Kaan DOĞAN
 GitHub:    https://github.com/kaandgnsh/hider
-Instagram: @kaandgnsh
+LinkedIn:  https://www.linkedin.com/in/kaan-do%C4%9Fan-911663280/
+Instagram: @kaandgn.sh
 
 OS      : arch / cachyos
 Backend : Tor SOCKS5 (127.0.0.1:9050 -> ControlPort 9051)
@@ -353,12 +357,11 @@ issue açıp ne yapmak istediğini belirt.
 
 ---
 
-## ⚠️ Yasal Uyarı
+## ⚠️ Eğitim Amacı ve Yasal Uyarı
 
-Bu araç yalnızca **eğitim**, **gizlilik koruması** ve **yetkili güvenlik
-testleri** için tasarlanmıştır. Kullanıcı, aracın kullanımından doğacak tüm
-yasal sorumlulukları kabul eder. Başkalarının sistemlerine izinsiz erişim
-suçtur ve bu proje böyle bir kullanım için tasarlanmamıştır.
+Bu proje **eğitim, ağ gizliliğini anlama ve izinli güvenlik testleri** için hazırlanmıştır. Yalnızca kendi cihazlarında, laboratuvar ortamında veya açıkça izin aldığın sistemlerde kullan.
+
+Tor veya proxy kullanmak seni otomatik olarak anonim yapmaz ve yaptığın işlemlerin yasal olduğu anlamına gelmez. Başkalarının sistemlerine izinsiz erişmek, güvenlik önlemlerini aşmak veya yasa dışı faaliyeti gizlemek amacıyla kullanma. Kullanıcı, yürürlükteki mevzuata ve hizmet koşullarına uymaktan sorumludur; eğitim amaçlı ibaresi tek başına hukuki sorumluluktan muafiyet sağlamaz.
 
 ---
 
@@ -370,10 +373,11 @@ MIT License — Detaylar için [LICENSE](LICENSE) dosyasına bakın.
 
 ## 👤 Yazar
 
-**kaandgnsh**
+**Kaan DOĞAN**
 
 - GitHub: [@kaandgnsh](https://github.com/kaandgnsh)
-- Instagram: [@kaandgnsh](https://instagram.com/kaandgnsh)
+- LinkedIn: [Kaan DOĞAN](https://www.linkedin.com/in/kaan-do%C4%9Fan-911663280/)
+- Instagram: [@kaandgn.sh](https://instagram.com/kaandgn.sh)
 
 ---
 
