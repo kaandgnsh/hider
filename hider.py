@@ -681,7 +681,10 @@ def _configure_torrc():
             active[parts[0].lower()] = ""
 
     cookie_auth = active.get('cookieauthentication')
-    if cookie_auth is not None and cookie_auth.split()[0].strip('"').lower() not in {'1', 'true'}:
+    cookie_values = cookie_auth.split() if cookie_auth is not None else []
+    if cookie_auth is not None and (
+        not cookie_values or cookie_values[0].strip('"').lower() not in {'1', 'true'}
+    ):
         log.error(
             "CookieAuthentication is disabled in %s. Refusing to weaken Tor control-port security; "
             "set CookieAuthentication 1 manually and retry.",
