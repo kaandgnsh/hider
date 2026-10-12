@@ -9,10 +9,14 @@ GITHUB = 'https://github.com/kaandgnsh/hider'
 INSTAGRAM = '@kaandgnsh'
 
 import argparse
+import hashlib
+import hmac
 import logging
 import os
 import platform
 import random
+import re
+import secrets
 import shutil
 import signal
 import socket
@@ -177,8 +181,20 @@ def fmt_geo(info):
     return ', '.join(p for p in parts if p) or '?'
 
 
+def _has_root_privileges():
+    if os.name == 'nt':
+        return True
+    return hasattr(os, 'geteuid') and os.geteuid() == 0
+
+
+def _privilege_label():
+    if os.name == 'nt':
+        return 'not applicable (Windows)'
+    return 'root' if _has_root_privileges() else 'user'
+
+
 def _re_exec_with_sudo():
-    if os.geteuid() == 0:
+    if _has_root_privileges():
         return
     if os.environ.get('HIDER_SUDO_REEXEC') == '1':
         print(C_KIRMIZI + "[!] Root yetkisi alinamadi." + C_BITIR)
@@ -200,36 +216,37 @@ def _re_exec_with_sudo():
 
 
 def _install_pysocks(osinfo):
+    """Install PySocks only through the OS package manager; never bypass PEP 668."""
     global _HAS_SOCKS
     if _HAS_SOCKS:
         return True
 
     fam = osinfo['family']
-    print(C_SARI + "[*] PySocks modulu eksik, kuruluyor..." + C_BITIR)
+    commands = {
+        'debian': ['apt-get', 'install', '-y', 'python3-socks'],
+        'arch': ['pacman', '-S', '--noconfirm', '--needed', 'python-pysocks'],
+        'fedora': ['dnf', 'install', '-y', 'python3-pysocks'],
+        'suse': ['zypper', '--non-interactive', 'install', 'python3-PySocks'],
+    }
+    command = commands.get(fam)
+    if command is None:
+        print(C_SARI + "[!] PySocks otomatik kurulumu bu sistemde desteklenmiyor." + C_BITIR)
+        print("    Paket yoneticinizle veya izole bir sanal ortamda manuel kurun.")
+        return False
 
-    if fam == 'debian':
-        rc = run(['apt-get', 'install', '-y', 'python3-socks'], quiet=False)
-    elif fam == 'arch':
-        rc = run(['pacman', '-Sy', '--noconfirm', '--needed', 'python-pysocks'], quiet=False)
-    elif fam == 'fedora':
-        rc = run(['dnf', 'install', '-y', 'python3-pysocks'], quiet=False)
-    elif fam == 'suse':
-        rc = run(['zypper', '--non-interactive', 'install', 'python3-PySocks'], quiet=False)
-    else:
-        rc = run([sys.executable, '-m', 'pip', 'install', '--quiet', 'PySocks'], quiet=False)
-
-    if rc != 0:
-        rc = run([sys.executable, '-m', 'pip', 'install', '--quiet',
-                  '--break-system-packages', 'PySocks'], quiet=False)
+    print(C_SARI + "[*] PySocks OS paket yoneticisiyle kuruluyor..." + C_BITIR)
+    if run(command, quiet=False) != 0:
+        print(C_KIRMIZI + "[!] PySocks kurulumu basarisiz." + C_BITIR)
+        return False
 
     try:
-        import socks as _s  # noqa
+        import socks  # noqa: F401
         _HAS_SOCKS = True
         print(C_YESIL + "[OK] PySocks kuruldu." + C_BITIR)
         return True
     except ImportError:
-        print(C_KIRMIZI + "[!] PySocks kurulamadi." + C_BITIR)
-        print("    Manuel kur: sudo pacman -S python-pysocks")
+        print(C_KIRMIZI + "[!] PySocks kuruldu ancak bu Python ortamina yuklenemedi." + C_BITIR)
+        print("    PySocks'i hider'i calistiran Python ortamina manuel kurun.")
         return False
 
 
@@ -349,13 +366,133 @@ class TorBackend(Backend):
     def start(self):
         return self.available()
 
+    @staticmethod
+    def _read_control_reply(sock, max_bytes=65536):
+        """Read one complete Tor control-protocol reply."""
+        buffer = bytearray()
+        received = 0
+        lines = []
+        while received <= max_bytes:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            received += len(chunk)
+            buffer.extend(chunk)
+            while True:
+                boundary = buffer.find(b"\r\n")
+                if boundary < 0:
+                    break
+                raw_line = bytes(buffer[:boundary])
+                del buffer[:boundary + 2]
+                lines.append(raw_line.decode("utf-8", errors="replace"))
+                if (
+                    len(raw_line) >= 4
+                    and raw_line[:3].isdigit()
+                    and raw_line[3:4] == b" "
+                ):
+                    return lines
+        raise OSError("Incomplete or oversized Tor control-protocol reply.")
+
     def _auth(self, sock):
-        if self.password:
-            cmd = 'AUTHENTICATE "' + self.password + '"\r\n'
-        else:
-            cmd = 'AUTHENTICATE\r\n'
-        sock.sendall(cmd.encode())
-        return sock.recv(1024).startswith(b'250')
+        """Authenticate with a configured password or Tor SAFECOOKIE."""
+        try:
+            sock.sendall(b"PROTOCOLINFO 1\r\n")
+            protocol_lines = self._read_control_reply(sock)
+            auth_line = next(
+                (line for line in protocol_lines if "AUTH METHODS=" in line),
+                "",
+            )
+            methods_match = re.search(r"METHODS=([A-Z,]+)", auth_line)
+            if not methods_match:
+                log.error("Tor did not advertise a supported authentication method.")
+                return False
+
+            methods = set(methods_match.group(1).split(","))
+
+            if self.password and "HASHEDPASSWORD" in methods:
+                if "\r" in self.password or "\n" in self.password:
+                    log.error("Tor control password contains unsupported line breaks.")
+                    return False
+                escaped = self.password.replace("\\", "\\\\").replace('"', '\\"')
+                sock.sendall(('AUTHENTICATE "' + escaped + '"\r\n').encode("utf-8"))
+                return any(
+                    line.startswith("250 OK")
+                    for line in self._read_control_reply(sock)
+                )
+
+            cookie_match = re.search(r'COOKIEFILE="([^"]+)"', auth_line)
+            if not cookie_match:
+                log.error("Tor did not provide a cookie file for cookie authentication.")
+                return False
+
+            cookie = Path(cookie_match.group(1)).read_bytes()
+            if len(cookie) != 32:
+                log.error("Tor authentication cookie has an unexpected length.")
+                return False
+
+            if "SAFECOOKIE" in methods:
+                client_nonce = secrets.token_bytes(32)
+                sock.sendall(
+                    b"AUTHCHALLENGE SAFECOOKIE "
+                    + client_nonce.hex().encode("ascii")
+                    + b"\r\n"
+                )
+                challenge_lines = self._read_control_reply(sock)
+                challenge_line = next(
+                    (line for line in challenge_lines if "AUTHCHALLENGE" in line),
+                    "",
+                )
+                server_hash_match = re.search(
+                    r"SERVERHASH=([0-9A-Fa-f]{64})", challenge_line
+                )
+                server_nonce_match = re.search(
+                    r"SERVERNONCE=([0-9A-Fa-f]{64})", challenge_line
+                )
+                if not server_hash_match or not server_nonce_match:
+                    log.error("Tor SAFECOOKIE challenge response was invalid.")
+                    return False
+
+                server_nonce = bytes.fromhex(server_nonce_match.group(1))
+                server_key = b"Tor safe cookie authentication server-to-controller hash"
+                client_key = b"Tor safe cookie authentication controller-to-server hash"
+                message = cookie + client_nonce + server_nonce
+                expected_server_hash = hmac.new(
+                    server_key, message, hashlib.sha256
+                ).digest()
+                received_server_hash = bytes.fromhex(server_hash_match.group(1))
+                if not hmac.compare_digest(expected_server_hash, received_server_hash):
+                    log.error("Tor SAFECOOKIE server authentication failed.")
+                    return False
+
+                client_hash = hmac.new(
+                    client_key, message, hashlib.sha256
+                ).hexdigest()
+                sock.sendall(
+                    b"AUTHENTICATE "
+                    + client_hash.encode("ascii")
+                    + b"\r\n"
+                )
+                return any(
+                    line.startswith("250 OK")
+                    for line in self._read_control_reply(sock)
+                )
+
+            if "COOKIE" in methods:
+                sock.sendall(
+                    b"AUTHENTICATE "
+                    + cookie.hex().encode("ascii")
+                    + b"\r\n"
+                )
+                return any(
+                    line.startswith("250 OK")
+                    for line in self._read_control_reply(sock)
+                )
+
+            log.error("Tor advertises no supported safe authentication method.")
+            return False
+        except (OSError, ValueError) as e:
+            log.error("Tor control authentication failed: %s", e)
+            return False
 
     def _newnym(self):
         try:
@@ -373,19 +510,8 @@ class TorBackend(Backend):
         return self._newnym()
 
     def stop(self):
-        print(C_SARI + "[*] Tor servisi durduruluyor..." + C_BITIR)
-        if have('systemctl'):
-            run(['systemctl', 'stop', 'tor'])
-            run(['systemctl', 'stop', 'tor@default'])
-        elif have('rc-service'):
-            run(['rc-service', 'tor', 'stop'])
-        elif have('brew'):
-            run(['brew', 'services', 'stop', 'tor'])
-        elif have('service'):
-            run(['service', 'tor', 'stop'])
-        # Manuel baslatilan tor surecini de oldur
-        run(['pkill', '-f', 'tor --quiet'])
-        log.info("Tor durduruldu.")
+        # Tor may be shared with other applications; do not stop the system daemon.
+        log.info("Leaving the Tor service running for other applications.")
 
     def proxies(self):
         return {
@@ -412,6 +538,22 @@ class TorBackend(Backend):
         return False
 
 
+def safe_proxy_label(proxy_url):
+    """Return a proxy endpoint without credentials or query parameters."""
+    from urllib.parse import urlsplit
+
+    candidate = proxy_url if '://' in proxy_url else 'http://' + proxy_url
+    try:
+        parsed = urlsplit(candidate)
+        host = parsed.hostname or 'unknown'
+        if ':' in host and not host.startswith('['):
+            host = '[' + host + ']'
+        port = ':' + str(parsed.port) if parsed.port is not None else ''
+        return parsed.scheme + '://' + host + port
+    except ValueError:
+        return '[invalid proxy]'
+
+
 class ProxyBackend(Backend):
     name = 'proxy'
 
@@ -429,7 +571,7 @@ class ProxyBackend(Backend):
             log.error("Hicbir proxy calismiyor.")
             return False
         self.current_proxy, self._last_ip = result
-        log.info("Baslangic proxy: %s -> %s", self.current_proxy, self._last_ip)
+        log.info("Baslangic proxy: %s -> %s", safe_proxy_label(self.current_proxy), self._last_ip)
         return True
 
     def rotate(self):
@@ -465,7 +607,7 @@ def _install_tor_pkg(osinfo):
         rc = run(['apt-get', 'install', '-y', 'tor'], quiet=False)
 
     elif fam == 'arch':
-        rc = run(['pacman', '-Sy', '--noconfirm', '--needed', 'tor'], quiet=False)
+        rc = run(['pacman', '-S', '--noconfirm', '--needed', 'tor'], quiet=False)
         if rc != 0 and not have('tor'):
             for helper in ('yay', 'paru'):
                 if have(helper):
@@ -493,28 +635,6 @@ def _install_tor_pkg(osinfo):
     return have('tor')
 
 
-def _ensure_tor_user():
-    try:
-        import pwd as _pwd
-        _pwd.getpwnam('tor')
-    except KeyError:
-        print(C_SARI + "[*] 'tor' sistem kullanicisi olusturuluyor..." + C_BITIR)
-        if have('useradd'):
-            run(['useradd', '--system', '--home-dir', '/var/lib/tor',
-                 '--create-home', '--shell', '/usr/bin/nologin',
-                 '--comment', 'Tor daemon user', 'tor'], quiet=False)
-    except ImportError:
-        pass
-
-    var_lib = Path('/var/lib/tor')
-    try:
-        var_lib.mkdir(parents=True, exist_ok=True)
-        subprocess.call(['chown', '-R', 'tor:tor', str(var_lib)])
-        subprocess.call(['chmod', '700', str(var_lib)])
-    except Exception as e:
-        log.debug("tor dizini izinleri ayarlanamadi: %s", e)
-
-
 def _find_torrc():
     candidates = [
         '/etc/tor/torrc',
@@ -531,8 +651,7 @@ def _find_torrc():
 
 
 def _configure_torrc():
-    _ensure_tor_user()
-
+    """Ensure local Tor ports use cookie authentication without weakening existing config."""
     torrc = _find_torrc()
 
     try:
@@ -550,34 +669,60 @@ def _configure_torrc():
         log.error("torrc okunamadi: %s", e)
         return False
 
-    real_lines = [
-        l.strip() for l in content.splitlines()
-        if l.strip() and not l.strip().startswith('#')
-    ]
-    real = '\n'.join(real_lines)
+    active = {}
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#'):
+            continue
+        parts = line.split(None, 1)
+        if len(parts) == 2:
+            active[parts[0].lower()] = parts[1].strip()
+        elif parts:
+            active[parts[0].lower()] = ""
 
-    needs_control = 'ControlPort' not in real
-    needs_cookie = 'CookieAuthentication' not in real
-    needs_socks = 'SocksPort' not in real
+    cookie_auth = active.get('cookieauthentication')
+    if cookie_auth is not None and cookie_auth.split()[0].strip('"').lower() not in {'1', 'true'}:
+        log.error(
+            "CookieAuthentication is disabled in %s. Refusing to weaken Tor control-port security; "
+            "set CookieAuthentication 1 manually and retry.",
+            torrc,
+        )
+        return False
 
-    if not (needs_control or needs_cookie or needs_socks):
-        log.info("torrc zaten yapilandirilmis.")
+    expected_ports = {'socksport': '9050', 'controlport': '9051'}
+    for directive, expected_port in expected_ports.items():
+        configured = active.get(directive)
+        if configured is None:
+            continue
+        if not re.search(r'(?:^|:)'+expected_port+r'(?:\s|$)', configured):
+            log.error(
+                "%s is already configured as %r in %s. Expected port %s; refusing to override it.",
+                directive, configured, torrc, expected_port,
+            )
+            return False
+
+    missing = []
+    if 'socksport' not in active:
+        missing.append('SocksPort ' + str(TOR_SOCKS_PORT))
+    if 'controlport' not in active:
+        missing.append('ControlPort ' + str(TOR_CONTROL_PORT))
+    if cookie_auth is None:
+        missing.append('CookieAuthentication 1')
+
+    if not missing:
+        log.info("Tor ports and cookie authentication are already configured.")
         return True
 
     if not os.access(str(torrc), os.W_OK):
-        print(C_KIRMIZI + "[!] " + str(torrc) + " yazilamiyor (root gerekli)." + C_BITIR)
+        print(C_KIRMIZI + "[!] " + str(torrc) + " yazilamiyor (yetki gerekli)." + C_BITIR)
         return False
 
     try:
-        with torrc.open('a', encoding='utf-8') as f:
-            f.write('\n# --- hider tarafindan eklendi ---\n')
-            if needs_socks:
-                f.write('SocksPort ' + str(TOR_SOCKS_PORT) + '\n')
-            if needs_control:
-                f.write('ControlPort ' + str(TOR_CONTROL_PORT) + '\n')
-            if needs_cookie:
-                f.write('CookieAuthentication 0\n')
-        print(C_YESIL + "[OK] torrc guncellendi: " + str(torrc) + C_BITIR)
+        with torrc.open('a', encoding='utf-8') as file:
+            file.write('\n# --- hider local control settings ---\n')
+            for directive in missing:
+                file.write(directive + '\n')
+        print(C_YESIL + "[OK] Tor local-port settings added with cookie authentication." + C_BITIR)
         return True
     except Exception as e:
         log.error("torrc yazilamadi: %s", e)
@@ -585,21 +730,17 @@ def _configure_torrc():
 
 
 def _restart_tor():
+    """Restart Tor to apply config without explicitly enabling a new boot-time service."""
     if have('systemctl'):
-        run(['systemctl', 'daemon-reload'])
-        run(['systemctl', 'enable', 'tor'])
-        run(['systemctl', 'stop', 'tor'])
-        time.sleep(1)
-        run(['systemctl', 'start', 'tor'])
-        if run(['systemctl', 'is-active', 'tor']) != 0:
-            run(['systemctl', 'start', 'tor@default'])
+        rc = run(['systemctl', 'restart', 'tor'], quiet=False, timeout=45)
+        if rc != 0:
+            run(['systemctl', 'restart', 'tor@default'], quiet=False, timeout=45)
     elif have('rc-service'):
-        run(['rc-service', 'tor', 'restart'])
-        run(['rc-update', 'add', 'tor', 'default'])
+        run(['rc-service', 'tor', 'restart'], quiet=False, timeout=45)
     elif have('brew'):
-        run(['brew', 'services', 'restart', 'tor'])
+        run(['brew', 'services', 'restart', 'tor'], quiet=False, timeout=45)
     elif have('service'):
-        run(['service', 'tor', 'restart'])
+        run(['service', 'tor', 'restart'], quiet=False, timeout=45)
 
 
 def _wait_for_tor_ports(backend, max_seconds=40):
@@ -632,7 +773,8 @@ def ensure_tor_ready(osinfo):
             return False
         print(C_YESIL + "[OK] Tor kuruldu." + C_BITIR)
 
-    _configure_torrc()
+    if not _configure_torrc():
+        return False
 
     print(C_SARI + "[*] Tor servisi baslatiliyor..." + C_BITIR)
     _restart_tor()
@@ -789,7 +931,7 @@ def pick_backend(args, osinfo):
 
 
 def banner(osinfo, backend):
-    root_durum = 'root' if os.geteuid() == 0 else 'user'
+    root_durum = _privilege_label()
     socks_durum = 'var' if _HAS_SOCKS else 'YOK'
     print(C_KALIN + C_CYAN + """
   _     _     _
@@ -820,7 +962,7 @@ def main():
 
     args = parse_args()
 
-    if not args.no_sudo and os.geteuid() != 0:
+    if not args.no_sudo and not _has_root_privileges():
         _re_exec_with_sudo()
 
     if args.verbose:
